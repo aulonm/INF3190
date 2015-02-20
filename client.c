@@ -1,48 +1,79 @@
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <netdb.h>
 
 
 int main(int argc, char* argv[]){
 
 
 	// To check if there are enough arguments
-	if(argc != 2){
-		printf("USAGE: %s [socket name]\n", argv[0]);
+	if(argc != 3){
+		printf("USAGE: %s [domain name] [message]\n", argv[0]);
 		return -1;
 	}
 
-	const char* sockname = argv[1];
-	int usock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	const char *sockname = argv[1];
+	const char *message = argv[2];
+	
 
-	if(usock == -1){
-		perror("Wrong with socket");
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNIX;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = 0;
+
+
+	//strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
+
+	int retv = getaddrinfo(sockname, 80, &hints, &res);
+	if(retv != 0){
+		printf("getaddrinfo failed: %s\n", gai_strerror(retv));
 		return -2;
 	}
 
-	struct sockaddr_un bindaddr;
-	bindaddr.sun_family = AF_UNIX;
-	strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
+	struct addrinfo *cur = res;
 
-	if(connect(usock, (struct sockaddr*)&bindaddr, sizeof(bindaddr))){
-		perror("Problems with connect");
+	int usock = socket(cur->ai_family, cur->ai_socktype, cur->ai_protocol);
+
+	if(usock == -1){
+		perror("socket");
 		return -3;
 	}
 
-	write(usock, "Client", 6);
-	char buf[100];
-	ssize_t recvd = read(usock, buf, 99);
+	retv = connect(usock, cur->ai_addr, cur->ai_addrlen);
 
-	if(recvd < 0){
-		perror("Problems with read");
+	if(retv != 0){
+		perror("Problems with connect");
 		return -4;
 	}
 
-	buf[recvd] = 0;
-	printf("Received message: %.*s\n", recvd, buf);
+	freeaddrinfo(res);
+
+	char buf[100];
+	
+	strcpy(buf, message);
+	ssize_t sent = send(usock, buf, strlen(buf), 0);
+	if(sent <= 0 ){
+		perror("Problems with send");
+		return -5;
+	}
+
+	ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
+
+	if(recvd <= 0){
+		perror("Problems with read");
+		return -6;
+	}
+
+	buf[recvd] = '\0';
+	printf("Received message: %s\n", buf);
 
 	close(usock);
 	return 0;
