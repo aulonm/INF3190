@@ -46,6 +46,16 @@ int main(int argc, char* argv[]){
 	printf("buf: %s\n", buf);
 	ssize_t sent = send(usock, buf, sizeof(buf), 0);
 
+	ssize_t recvd = recv(usock, buf, 99, 0);
+	if(recvd < 0){
+		perror("read");
+		return -4;
+	}
+
+	buf[recvd] = 0;
+	printf("Received message: %.*s\n", recvd, buf);
+
+
 	close(usock);
 	return 0;
 
