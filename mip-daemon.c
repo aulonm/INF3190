@@ -6,6 +6,15 @@
 #include <sys/un.h>
 #include <netinet/in.h>
 
+struct ether_frame{
+	uint8_t header[16];
+	uint8_t src_addr[8];
+	uint8_t dst_addr[8];
+	char	contents[0];
+}
+
+
+
 
 
 static int get_if_hwaddr(int sock, const char* devname, uint8_t hwaddr[6]){
