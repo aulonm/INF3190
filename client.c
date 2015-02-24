@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -11,15 +12,17 @@
 int main(int argc, char* argv[]){
 
 	// To check if there are enough arguments
-	if(argc != 3){
-		printf("USAGE: %s [domain name] [message]\n", argv[0]);
+	if(argc != 4){
+		printf("USAGE: %s [domain name] [address] [message]\n", argv[0]);
 		return -1;
 	}
 
 	const char *sockname = argv[1];
-	const char *message = argv[2];
+	const char *addr = argv[2];
+	const char *message	= argv[3];
 
-
+	uint8_t addrs = strtoul(addr, 0, 10);
+	printf("%u\n", addrs);
 
 	//strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
 
@@ -40,20 +43,23 @@ int main(int argc, char* argv[]){
 	}
 
 
-
+	
 	char buf[100];
-	strcpy(buf, message);
+	buf[0] = addrs;
+	buf[1] = 0;
+	//strcpy(buf, (char)addrs);
+	strcat(buf, message);
 	printf("buf: %s\n", buf);
 	ssize_t sent = send(usock, buf, sizeof(buf), 0);
 
-	ssize_t recvd = recv(usock, buf, 99, 0);
-	if(recvd < 0){
-		perror("read");
-		return -4;
-	}
+	//ssize_t recvd = recv(usock, buf, 99, 0);
+	//if(recvd < 0){
+	//	perror("read");
+	//	return -4;
+	//}
 
-	buf[recvd] = 0;
-	printf("Received message: %.*s\n", recvd, buf);
+	//buf[recvd] = 0;
+		//printf("Received message: %.*s\n", recvd, buf);
 
 
 	close(usock);
