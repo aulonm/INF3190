@@ -111,8 +111,8 @@ int main(int argc, char *argv[]) {
 	memset(&arp_check, 0, sizeof(arp_check));
 
 	/**
-	*   AF_UNIX         =
-	*   SOCK_SEQPACKET  =
+	*   AF_UNIX         = Local communication
+	*   SOCK_SEQPACKET  = Reliable two-way connection
 	*   0               =
 	**/
 	clientSocket = socket(AF_UNIX, SOCK_SEQPACKET, 0);

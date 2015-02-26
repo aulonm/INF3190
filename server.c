@@ -9,7 +9,7 @@
 int main(int argc, char* argv[]){
 
 	char* pong = "PONG!";
-	char sbuf[100];
+	char sbuf[1500];
 	strcpy(sbuf, pong);
 
 	if(argc != 2){
@@ -43,8 +43,12 @@ int main(int argc, char* argv[]){
 			printf("Received '%s' from client\n", buf+1);
 			sbuf[0] = buf[0];
 			strcat(sbuf, pong);
-			send(usock, sbuf, sizeof(sbuf), 0);
-			
+			ssize_t sent = send(usock, sbuf, sizeof(sbuf), 0);
+
+			if(sent < 0){
+				perror("Send");
+				return -4;
+			}
 		}
 	}
 
