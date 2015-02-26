@@ -7,6 +7,10 @@
 
 int main(int argc, char* argv[]){
 
+	char* pong = "Pong!";
+	char* sbuf[100];
+	strcpy(sbuf, pong);
+
 	if(argc != 2){
 		printf("USAGE: %s [socket name]\n", argv[0]);
 		return -1;
@@ -24,27 +28,33 @@ int main(int argc, char* argv[]){
 	bindaddr.sun_family = AF_UNIX;
 	strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
 
-	if(bind(usock, (struct sockaddr*)&bindaddr, sizeof(bindaddr))){
-		perror("bind");
+	if(connect(usock, (struct sockaddr*)&bindaddr, sizeof(bindaddr))){
+		perror("Problems with connect");
 		return -3;
 	}
 
-	if(listen(usock, 5)){
-		perror("listen");
-		return -4;
-	}
+	// if(bind(usock, (struct sockaddr*)&bindaddr, sizeof(bindaddr))){
+	// 	perror("bind");
+	// 	return -3;
+	// }
+
+	// if(listen(usock, 5)){
+	// 	perror("listen");
+	// 	return -4;
+	// }
 
 	while(1){
-		int cfd = accept(usock, NULL, NULL);
 		char buf[100];
-		ssize_t recvd = read(cfd, buf, 99);
+		ssize_t recvd = recv(usock, buf, 99, 0);
 
 		if(recvd > 0){
 			buf[recvd] = 0;
 			printf("Received '%s' from client\n", buf);
-			write(cfd, "Pong", 6);
+			sbuf[0] = buf[0];
+			strcat(sbuf, pong);
+			send(usock, sbuf, sizeof(buf), 0);
+			memset(&sbuf, 0, sizeof(sbuf));
 		}
-		close(cfd);
 	}
 
 	close(usock);

@@ -96,7 +96,7 @@ int main(int argc, char* argv[]){
 
 	sockname = argv[1];
 	interface = argv[2];
-	addr = argv[3];
+	addr = strtoul(argv[3], 0, 10);
 
 	sock1 = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 	
@@ -161,18 +161,36 @@ int main(int argc, char* argv[]){
 	}
 
 	fd_set rdfds;
-
+	int cfd = -1;
 	while(1){
-		int cfd;
+		
 		FD_ZERO(&rdfds);
-		FD_SET(sock1, &rdfds);
+
+		if(cfd < 0){
+			printf("Setting socket\n");
+			FD_SET(sock1, &rdfds);
+		}else{
+			printf("Setting cfd\n");
+			FD_SET(cfd, &rdfds);
+		}
+		// if(cfd == 0){
+		// 	cfd = accept(sock1, NULL, NULL);
+		// 	printf("server connect\n");
+		// }
+
+		//FD_SET(cfd, &rdfds);
 		FD_SET(sock2, &rdfds);
+		
+		int maxfd;
 
+		if(cfd > maxfd) maxfd = cfd;
+		if(sock1 > maxfd) maxfd = sock1;
+		if(sock2 > maxfd) maxfd = sock2;
 
-		int maxfd = sock2;
+		//int maxfd = sock2;
 
+		printf("Waiting for select\n");
 		retv = select(maxfd+1, &rdfds, NULL, NULL, NULL);
-
 		if(retv <= 0){
 			perror("select");
 			return -6;
@@ -180,32 +198,94 @@ int main(int argc, char* argv[]){
 
 
 		// IF AF_UNIX SOCKET
-		if(FD_ISSET(sock1, &rdfds)){
-			cfd = accept(sock1, NULL, NULL);
-			printf("New connection! %d\n", cfd);
+		printf("Before select\n");
+		if(FD_ISSET(cfd, &rdfds)){
+			//cfd = accept(sock1, NULL, NULL);
+			printf("New connection local! %d\n", cfd);
 			char rbuf[100];
 			ssize_t recvd = recv(cfd, rbuf, 99, 0);
-			if(recvd < 0){
+			if(recvd == 0){
+				// perror("read");
+				// return -7;
+				//close(cfd);
+				cfd = -1;
+				continue;
+			}else if(recvd < 0){
 				perror("read");
 				return -7;
+			}else{
+				printf("Recieved %zd bytes from client %s\n", cfd, rbuf);
 			}
-			printf("Recieved %zd bytes from client %s\n", cfd, rbuf);
+
+			printf("THIS IS THE ADDRESS FOR ARP: %u\n", (uint8_t)rbuf[0]);
+
+			if(arp_check[(uint8_t)rbuf[0]] != 1){
+				printf("I DONT HAVE THIS ADDRESS\n");
+			}
 			
+			// ARP REQUEST
+			if(arp_check[(uint8_t)rbuf[0]] != 1){
+				printf("SENDING ARP REQUEST:\n");
+				size_t mipsize = sizeof(struct mip_packet) + recvd-1;
+				struct mip_packet *arp_req = malloc(mipsize);
+				assert(arp_req);
+
+				arp_req->TRA = 1;
+				arp_req->TTL = 15;
+				arp_req->payload = 0;
+				arp_req->src_addr = addr;
+				arp_req->dst_addr = (uint8_t)rbuf[0];
+
+				size_t fsize = sizeof(struct ether_frame) + mipsize;
+				struct ether_frame *frame = malloc(fsize);
+
+				memcpy(frame->dst_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6);
+				memcpy(frame->src_addr, iface_hwaddr, 6);
+				frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
+				memcpy(frame->contents, arp_req, mipsize);
+				ssize_t retv = send(sock2, frame, fsize, 0);
+				printf("Message size=%zu, sent=%zd\n", fsize, retv);
+
+				while(1){
+					printf("WAITING FOR ARP RESPONSE\n");
+					char buf[1500];
+					struct ether_frame *arp_resp_frame = (struct ether_frame*)buf;
+			
+					ssize_t retv = recv(sock2, buf, sizeof(buf), 0);
+					struct mip_packet *arp_resp_mip = (struct mip_packet*)arp_resp_frame->contents;
+					// IF TRA BITS ARE 000 THEN IT IS AN ARP RESPONSE
+					if((arp_resp_mip->TRA == 0) && (arp_resp_mip->dst_addr == (uint8_t)addr)){
+						// CACHE 
+					}else{
+						printf("This is not the response I was looking for");
+					}
+
+				}
+
+			}
+
 			//MIP PACKET
 			size_t mipsize = sizeof(struct mip_packet)+recvd-1;
 			struct mip_packet *mip = malloc(mipsize);
+			//printf("mipsize: %d", mipsize);
 			assert(mip);
 
 			mip->TRA = 4;
-			mip->TTL = 16;
+			mip->TTL = 15;
 			mip->payload = recvd-1;
 			mip->dst_addr = 1;
 			mip->src_addr = &addr;
+			// printf("TRA: %d", mip->TRA);
+			// printf("TTL: %d", mip->TTL);
+			// printf("Payload: %d", mip->payload);
+			// printf("sent buf: %s\n", rbuf);
 			memcpy(mip->contents, rbuf+1, sizeof(rbuf)-1);
+
+			//printf("mip contents: %s\n", mip->contents);
 
 
 			//ETHER FRAME
-			size_t msgsize = sizeof(struct ether_frame)+strlen(interface);
+			size_t msgsize = sizeof(struct ether_frame) + mipsize;
 			struct ether_frame *frame = malloc(msgsize);
 
 			memcpy(frame->dst_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6);
@@ -214,8 +294,7 @@ int main(int argc, char* argv[]){
 
 			frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
 
-			memcpy(frame->contents, mip, sizeof(mip));
-
+			memcpy(frame->contents, mip, mipsize);
 
 			ssize_t retv = send(sock2, frame, msgsize, 0);
 			printf("Message size=%zu, sent=%zd\n", msgsize, retv);
@@ -223,19 +302,63 @@ int main(int argc, char* argv[]){
 
 			//send(cfd, "Pong!", 5, 0);
 		}
+		if(FD_ISSET(sock1, &rdfds)){
+			printf("Connected sock\n");
+			cfd = accept(sock1, NULL, NULL);
+		}
 		// IF RAW SOCKET
 		if(FD_ISSET(sock2, &rdfds)){
 			
-
+			// GET THE ETHERNET FRAME FROM OTHER MIPS
 			char buf[1500];
 			struct ether_frame *frame = (struct ether_frame*)buf;
 			
 			ssize_t retv = recv(sock2, buf, sizeof(buf), 0);
-			struct mip_packet *mipp = frame->contents;
+			struct mip_packet *mipp = (struct mip_packet*)frame->contents;
+
+			// Check if it is a transport and destination is this mip-daemon
+			if((mipp->TRA == 4) && (mipp->dst_addr == (uint8_t)addr)){
+
+			}else if((mipp->TRA == 1) && (mipp->dst_addr == (uint8_t)addr)){ 	//check if it is a arp request and destination is this mip-daemon
+				// Make a new MIP packet with an ARP RESPONSE
+				puts("Got ARP request, now making an ARP response\n");
+				size_t resp_mipsize = sizeof(struct mip_packet) + retv; // is it possible to use the size of recieved mipp?
+				struct mip_packet *resp_packet = malloc(resp_mipsize);
+				assert(resp_packet);
+
+				resp_packet->TRA = 0;
+				resp_packet->TTL = 15;
+				resp_packet->src_addr = mipp->dst_addr;
+				resp_packet->dst_addr = mipp->src_addr;
+
+				size_t resp_fsize = sizeof(struct ether_frame) + resp_mipsize;
+				struct ether_frame *resp_frame = malloc(resp_fsize);
+
+				memcpy(resp_frame->dst_addr, frame->src_addr, 6);
+				memcpy(resp_frame->src_addr, iface_hwaddr, 6);
+				resp_frame->eth_proto[0] = resp_frame->eth_proto[1] = 0xFF;
+				memcpy(resp_frame->contents, resp_packet, resp_mipsize);
+				puts("ARP response sending!\n");
+				ssize_t send_resp = send(sock2, resp_frame, resp_fsize, 0);
+				// CACHE THE ADDRESS TO ARP CACHE TABLE
+				memcpy(arp_cache[mipp->src_addr], frame->src_addr, 6);
+
+			}else{ // else just fuck off and drop it
+				printf("This is not the mip you are looking for\n");
+			}
 
 			printf("Destination address: ");
-			printf("%u\n",mipp->TRA);
+			printf("%s\n",mipp->contents);
 
+			char* sbuf[100];
+			sbuf[0] = mipp->src_addr;
+			printf("%s\n", sbuf);
+			strcat(sbuf, mipp->contents);
+
+			// SEND MESSAGE TO SERVER
+			printf("Sending...\n");
+			ssize_t sent = send(cfd, sbuf, strlen(sbuf), 0);
+			printf("Sent: %d\n", sent);
 		}
 
 
