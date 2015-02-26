@@ -14,6 +14,8 @@ int main(int argc, char* argv[]){
 	// To check if there are enough arguments
 	if(argc != 4){
 		printf("USAGE: %s [domain name] [address] [message]\n", argv[0]);
+		printf("");
+		printf("");
 		return -1;
 	}
 
@@ -42,14 +44,12 @@ int main(int argc, char* argv[]){
 		return -3;
 	}
 
-
-	
 	char buf[100];
 	buf[0] = addrs;
 	buf[1] = 0;
 	//strcpy(buf, (char)addrs);
 	strcat(buf, message);
-	printf("buf: %s\n", buf);
+	printf("buf: %s\n", buf+1);
 	ssize_t sent = send(usock, buf, sizeof(buf), 0);
 
 	ssize_t recvd = recv(usock, buf, 99, 0);
@@ -59,7 +59,7 @@ int main(int argc, char* argv[]){
 	}
 
 	buf[recvd] = 0;
-	printf("Received message: %.*s\n", recvd, buf);
+	printf("Received message: %.*s\n", recvd-1, buf+1);
 
 
 	close(usock);

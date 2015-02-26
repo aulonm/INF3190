@@ -7,7 +7,7 @@
 
 int main(int argc, char* argv[]){
 
-	char* pong = "Pong!";
+	char* pong = "PONG!";
 	char* sbuf[100];
 	strcpy(sbuf, pong);
 
@@ -49,7 +49,7 @@ int main(int argc, char* argv[]){
 
 		if(recvd > 0){
 			buf[recvd] = 0;
-			printf("Received '%s' from client\n", buf);
+			printf("Received '%s' from client\n", buf+1);
 			sbuf[0] = buf[0];
 			strcat(sbuf, pong);
 			send(usock, sbuf, sizeof(buf), 0);
