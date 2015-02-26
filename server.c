@@ -5,10 +5,11 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+
 int main(int argc, char* argv[]){
 
 	char* pong = "PONG!";
-	char* sbuf[100];
+	char sbuf[100];
 	strcpy(sbuf, pong);
 
 	if(argc != 2){
@@ -33,27 +34,17 @@ int main(int argc, char* argv[]){
 		return -3;
 	}
 
-	// if(bind(usock, (struct sockaddr*)&bindaddr, sizeof(bindaddr))){
-	// 	perror("bind");
-	// 	return -3;
-	// }
-
-	// if(listen(usock, 5)){
-	// 	perror("listen");
-	// 	return -4;
-	// }
-
 	while(1){
-		char buf[100];
-		ssize_t recvd = recv(usock, buf, 99, 0);
-
+		char buf[1500];
+		ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
+		memset(sbuf, 0, sizeof(sbuf));
 		if(recvd > 0){
 			buf[recvd] = 0;
 			printf("Received '%s' from client\n", buf+1);
 			sbuf[0] = buf[0];
 			strcat(sbuf, pong);
-			send(usock, sbuf, sizeof(buf), 0);
-			memset(&sbuf, 0, sizeof(sbuf));
+			send(usock, sbuf, sizeof(sbuf), 0);
+			
 		}
 	}
 

@@ -1,3 +1,5 @@
+LC_ALL=C
+LANG=C
 CC=gcc
 CFLAGS=-Wall
 
