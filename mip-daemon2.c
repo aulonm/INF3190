@@ -382,6 +382,7 @@ int main(int argc, char *argv[]) {
 			}
 
 			struct mip_packet *recv_mip = (struct mip_packet *)frame->contents;
+			uint8_t MIP_dest = mip->src_addr;
 
 			// Tell them what you got, mip and mac
 			if(debug){

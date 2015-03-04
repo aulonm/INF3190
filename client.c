@@ -29,7 +29,7 @@ int main(int argc, char* argv[]){
 	const char *sockname = argv[1];
 	const char *addr = argv[2];
 	const char *message	= argv[3];
-
+	
 	uint8_t addrs = strtoul(addr, 0, 10);
 
 	/**
@@ -72,6 +72,8 @@ int main(int argc, char* argv[]){
 	/* start the timer */
 	begin = clock();
 	tv.tv_sec = 1;
+
+	printf("%u\n", buf[0]);
 
 	ssize_t sent = send(usock, buf, strlen(buf), 0);
 

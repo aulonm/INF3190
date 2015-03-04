@@ -42,8 +42,10 @@ int main(int argc, char* argv[]){
 			buf[recvd] = 0;
 			printf("Received '%s' from client\n", buf+1);
 			sbuf[0] = buf[0];
+			sbuf[1] = 0;
 			strcat(sbuf, pong);
-			ssize_t sent = send(usock, sbuf, sizeof(sbuf), 0);
+			printf("sending: %s - %u\n", sbuf, sizeof(sbuf));
+			ssize_t sent = send(usock, sbuf, strlen(sbuf), 0);
 
 			if(sent < 0){
 				perror("Send");
