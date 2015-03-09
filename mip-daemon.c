@@ -272,7 +272,7 @@ int main(int argc, char *argv[]) {
 				}
 
 				if(debug){
-					puts("Arp request:");
+					printf("Arp request:");
 					printf("\tFrom mip: %u, to mip: %u\n", addr, (uint8_t)rbuf[0]);
 					printf("\tSource ethernet address: ");
 					printmac(iface_hwaddr);
@@ -297,7 +297,7 @@ int main(int argc, char *argv[]) {
 					/* If TRA bits are 000 then it is an ARP Response */
 					if((mip->TRA == 0) && (mip->dst_addr == addr)){
 						if(debug){
-							puts("Got ARP response:");
+							printf("Got ARP response:");
 							printf("\tFrom mip: %u\n", mip->src_addr);
 						}
 
@@ -311,7 +311,7 @@ int main(int argc, char *argv[]) {
 			}
 
 			if(debug){
-				puts("Arp Table:");
+				printf("Arp Table:");
 				int i;
 				for(i = 0; i < 256; i++){
 					if(arp_check[i]){
@@ -358,7 +358,7 @@ int main(int argc, char *argv[]) {
 			free(frame);
 
 			if(debug){
-				puts("Sending to the other MIP:");
+				printf("Sending to the other MIP:");
 				printf("\tSource Mac: 		");
 				printmac(frame->src_addr);
 				printf("\tDestination Mac: 	");
@@ -390,7 +390,7 @@ int main(int argc, char *argv[]) {
 			
 			// Tell them what you got, mip and mac
 			if(debug){
-				puts("Receiving ether frame from other MIP:");
+				printf("Receiving ether frame from other MIP:");
 				printf("\tSource Mac: 		");
 				printmac(frame->src_addr);
 				printf("\tDestination Mac: 	");
