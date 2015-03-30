@@ -38,6 +38,22 @@ struct ether_frame {
 	uint8_t contents[0];
 } __attribute__((packed));
 
+int clientSocket, networkSocket, i;
+int debug = 0;						// Debug mode
+uint8_t iface_hwaddr[6];			// Mac address array
+uint8_t arp_cache[256][6];			// ARP-cache to holde the MAC addrs
+uint8_t arp_check[256];				// ARP-check to know if there are any addrs there
+uint8_t routing_table[256][2];		// The routing table
+uint8_t addr;						// Address where to send messages
+const char *sockname;				// socket name
+const char *interface;				// The interface to send packets to
+
+
+struct ether_frame* frame;
+size_t msgsize;
+struct mip_packet* mip;
+size_t mipsize;
+
 /**
 *   Retrieves the hardware address of the given network device
 *
@@ -71,19 +87,130 @@ static void printmac(uint8_t mac[6]) {
 	for (i = 0; i < 5; i++) {
 		printf("%02x:", mac[i]);
 	}
-	printf("%02x\n:", mac[5]);
+	printf("%02x\n", mac[5]);
 }
 
+int arp_request(char rbuf[1500]){
+	mipsize = sizeof(struct mip_packet);
+	mip = malloc(mipsize);
+	assert(mip);
+
+	printf("%u\n", rbuf[0]);
+	mip->TRA = 1;
+	mip->TTL = 15;
+	mip->payload = 0;
+	mip->dst_addr = rbuf[0];
+	mip->src_addr = addr;
+
+	msgsize = sizeof(struct ether_frame) + mipsize;
+	frame = malloc(msgsize);
+
+	/* Ethernet destination address */
+	memcpy(frame->dst_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6);
+
+	/* Fill in our source address */
+	memcpy(frame->src_addr, iface_hwaddr, 6);
+
+	/* Ethernet protocol field = 0xFFFF (MIP) */
+	frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
+		
+	/* Fill in the message */
+	memcpy(frame->contents, mip, mipsize);
+
+	/* Send the packet */
+	ssize_t retv = send(networkSocket, frame, msgsize, 0);
+
+	free(mip);
+	free(frame);
+
+	if(retv < 0){
+		perror("ARP Request send");
+		return -14;
+	}
+
+	if(debug){
+		printf("Arp request:\n");
+		printf("\tFrom mip: %u, to mip: %u\n", addr, (uint8_t)rbuf[0]);
+		printf("\tSource ethernet address: ");
+		printmac(iface_hwaddr);
+	}
+
+	while(1){
+		char buf[1500];
+		memset(buf, 0, sizeof(buf));
+
+		frame = (struct ether_frame*)buf;
+
+		ssize_t retv = recv(networkSocket, buf, sizeof(buf), 0);
+
+		if(retv < 0){
+			perror("ARP Response receive");
+			return -15;
+		}
+
+		mip = (struct mip_packet*)frame->contents;
+
+		
+		/* If TRA bits are 000 then it is an ARP Response */
+		if((mip->TRA == 0) && (mip->dst_addr == addr)){
+			if(debug){
+				printf("Got ARP response:\n");
+				printf("\tFrom mip: %u\n", mip->src_addr);
+			}
+
+			/* Cache the MAC address */
+			memcpy(arp_cache[mip->src_addr], frame->src_addr, 6);
+			arp_check[mip->src_addr] = 1;
+
+			break;
+		}
+	}
+	return 0;
+}
+
+int arp_response(struct mip_packet* recvd_mip){
+	uint8_t MIP_dest = recvd_mip->src_addr;
+	printf("Sending arp response\n");
+	mipsize = sizeof(struct mip_packet);
+	mip = malloc(mipsize);
+	assert(mip);
+
+	mip->TRA = 0;
+	mip->TTL = 15;
+	mip->payload = 0;
+	mip->src_addr = addr;
+	mip->dst_addr = MIP_dest;
+
+	msgsize = sizeof(struct ether_frame) + sizeof(mip);
+	frame = malloc(msgsize);
+	assert(frame);
+
+	memcpy(frame->dst_addr, arp_cache[MIP_dest], 6);
+	memcpy(frame->src_addr, iface_hwaddr, 6);
+	frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
+	memcpy(frame->contents, mip, mipsize);
+	ssize_t retv = send(networkSocket, frame, msgsize, 0);
+
+	free(mip);
+	free(frame);
+
+	if(retv < 0){
+		perror("ARP response send");
+		return -17;
+	}
+
+	// Sent ARP Response back
+	if(debug){
+		printf("Responding to arp request from MIP %u", mip->dst_addr);
+	}
+
+	memcpy(arp_cache[MIP_dest], frame->src_addr, 6);
+	arp_check[MIP_dest] = 1;
+	return 0;
+}
+
+
 int main(int argc, char *argv[]) {
-	
-	int clientSocket, networkSocket, i;
-	int debug = 0;						// Debug mode
-	uint8_t iface_hwaddr[6];			// Mac address array
-	uint8_t arp_cache[256][6];			// ARP-cache to holde the MAC addrs
-	uint8_t arp_check[256];				// ARP-check to know if there are any addrs there
-	uint8_t addr;						// Address where to send messages
-	const char *sockname;				// socket name
-	const char *interface;				// The interface to send packets to
 
 	if(argc < 4 || argc > 5){
 		printf("USAGE: %s [socket] [interface] [src-addr] [-d]\n", argv[0]);
@@ -183,12 +310,6 @@ int main(int argc, char *argv[]) {
 	fd_set readfds;
 	int cfd = -1;
 
-	struct ether_frame* frame;
-	size_t msgsize;
-	struct mip_packet* mip;
-	size_t mipsize;
-
-
 	while(1){
 		/* Clear the set ahead of time */
 		FD_ZERO(&readfds);
@@ -234,84 +355,85 @@ int main(int argc, char *argv[]) {
 			/* ARP REQUEST */
 			if(arp_check[(unsigned int)rbuf[0]] != 1){
 				/* Start making the Ether frame */
-				mipsize = sizeof(struct mip_packet);
-				mip = malloc(mipsize);
-				assert(mip);
+				arp_request(rbuf);
+				// mipsize = sizeof(struct mip_packet);
+				// mip = malloc(mipsize);
+				// assert(mip);
 
-				printf("%u\n", rbuf[0]);
-				mip->TRA = 1;
-				mip->TTL = 15;
-				mip->payload = 0;
-				mip->dst_addr = rbuf[0];
-				mip->src_addr = addr;
+				// printf("%u\n", rbuf[0]);
+				// mip->TRA = 1;
+				// mip->TTL = 15;
+				// mip->payload = 0;
+				// mip->dst_addr = rbuf[0];
+				// mip->src_addr = addr;
 
-				msgsize = sizeof(struct ether_frame) + mipsize;
-				frame = malloc(msgsize);
+				// msgsize = sizeof(struct ether_frame) + mipsize;
+				// frame = malloc(msgsize);
 
-				/* Ethernet destination address */
-				memcpy(frame->dst_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6);
+				// /* Ethernet destination address */
+				// memcpy(frame->dst_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6);
 
-				/* Fill in our source address */
-				memcpy(frame->src_addr, iface_hwaddr, 6);
+				// /* Fill in our source address */
+				// memcpy(frame->src_addr, iface_hwaddr, 6);
 
-				/* Ethernet protocol field = 0xFFFF (MIP) */
-				frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
+				// /* Ethernet protocol field = 0xFFFF (MIP) */
+				// frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
 					
-				/* Fill in the message */
-				memcpy(frame->contents, mip, mipsize);
+				// /* Fill in the message */
+				// memcpy(frame->contents, mip, mipsize);
 
-				/* Send the packet */
-				ssize_t retv = send(networkSocket, frame, msgsize, 0);
+				// /* Send the packet */
+				// ssize_t retv = send(networkSocket, frame, msgsize, 0);
 
-				free(mip);
-				free(frame);
+				// free(mip);
+				// free(frame);
 
-				if(retv < 0){
-					perror("ARP Request send");
-					return -14;
-				}
+				// if(retv < 0){
+				// 	perror("ARP Request send");
+				// 	return -14;
+				// }
 
-				if(debug){
-					printf("Arp request:");
-					printf("\tFrom mip: %u, to mip: %u\n", addr, (uint8_t)rbuf[0]);
-					printf("\tSource ethernet address: ");
-					printmac(iface_hwaddr);
-				}
+				// if(debug){
+				// 	printf("Arp request:");
+				// 	printf("\tFrom mip: %u, to mip: %u\n", addr, (uint8_t)rbuf[0]);
+				// 	printf("\tSource ethernet address: ");
+				// 	printmac(iface_hwaddr);
+				// }
 
-				while(1){
-					char buf[1500];
-					memset(buf, 0, sizeof(buf));
+				// while(1){
+				// 	char buf[1500];
+				// 	memset(buf, 0, sizeof(buf));
 
-					frame = (struct ether_frame*)buf;
+				// 	frame = (struct ether_frame*)buf;
 
-					ssize_t retv = recv(networkSocket, buf, sizeof(buf), 0);
+				// 	ssize_t retv = recv(networkSocket, buf, sizeof(buf), 0);
 
-					if(retv < 0){
-						perror("ARP Response receive");
-						return -15;
-					}
+				// 	if(retv < 0){
+				// 		perror("ARP Response receive");
+				// 		return -15;
+				// 	}
 
-					mip = (struct mip_packet*)frame->contents;
+				// 	mip = (struct mip_packet*)frame->contents;
 
 					
-					/* If TRA bits are 000 then it is an ARP Response */
-					if((mip->TRA == 0) && (mip->dst_addr == addr)){
-						if(debug){
-							printf("Got ARP response:");
-							printf("\tFrom mip: %u\n", mip->src_addr);
-						}
+				// 	/* If TRA bits are 000 then it is an ARP Response */
+				// 	if((mip->TRA == 0) && (mip->dst_addr == addr)){
+				// 		if(debug){
+				// 			printf("Got ARP response:");
+				// 			printf("\tFrom mip: %u\n", mip->src_addr);
+				// 		}
 
-						/* Cache the MAC address */
-						memcpy(arp_cache[mip->src_addr], frame->src_addr, 6);
-						arp_check[mip->src_addr] = 1;
+				// 		/* Cache the MAC address */
+				// 		memcpy(arp_cache[mip->src_addr], frame->src_addr, 6);
+				// 		arp_check[mip->src_addr] = 1;
 
-						break;
-					}
-				}
+				// 		break;
+				// 	}
+				// }
 			}
 
 			if(debug){
-				printf("Arp Table:");
+				printf("Arp Table:\n");
 				int i;
 				for(i = 0; i < 256; i++){
 					if(arp_check[i]){
@@ -354,11 +476,8 @@ int main(int argc, char *argv[]) {
 				return -11;
 			}
 
-			free(mip);
-			free(frame);
-
 			if(debug){
-				printf("Sending to the other MIP:");
+				printf("Sending to the other MIP:\n");
 				printf("\tSource Mac: 		");
 				printmac(frame->src_addr);
 				printf("\tDestination Mac: 	");
@@ -366,7 +485,9 @@ int main(int argc, char *argv[]) {
 				printf("\tMIP source: 		%u\n", mip->src_addr);
 				printf("\tMIP Destination: 	%u\n", mip->dst_addr);
 			}
-			
+
+			free(mip);
+			free(frame);
 		}
 
 		/* If we dont have any connection on that socket, then accept one */
@@ -390,7 +511,7 @@ int main(int argc, char *argv[]) {
 			
 			// Tell them what you got, mip and mac
 			if(debug){
-				printf("Receiving ether frame from other MIP:");
+				printf("Receiving ether frame from other MIP:\n");
 				printf("\tSource Mac: 		");
 				printmac(frame->src_addr);
 				printf("\tDestination Mac: 	");
@@ -419,47 +540,48 @@ int main(int argc, char *argv[]) {
 					printf("Sent to client: %s\n", sbuf);
 				}
 			}
+
 			/* Check if it is an ARP Request, if it is then start making ARP Response and send */
 			else if((mip->TRA == 1) && (mip->dst_addr == addr)){
-				uint8_t MIP_dest = mip->src_addr;
-				printf("Sending arp response\n");
-				mipsize = sizeof(struct mip_packet);
-				mip = malloc(mipsize);
-				assert(mip);
+				arp_response(mip);
+				// uint8_t MIP_dest = mip->src_addr;
+				// printf("Sending arp response\n");
+				// mipsize = sizeof(struct mip_packet);
+				// mip = malloc(mipsize);
+				// assert(mip);
 
-				mip->TRA = 0;
-				mip->TTL = 15;
-				mip->payload = 0;
-				mip->src_addr = addr;
-				mip->dst_addr = MIP_dest;
+				// mip->TRA = 0;
+				// mip->TTL = 15;
+				// mip->payload = 0;
+				// mip->src_addr = addr;
+				// mip->dst_addr = MIP_dest;
 
-				msgsize = sizeof(struct ether_frame) + sizeof(mip);
-				frame = malloc(msgsize);
-				assert(frame);
+				// msgsize = sizeof(struct ether_frame) + sizeof(mip);
+				// frame = malloc(msgsize);
+				// assert(frame);
 
-				memcpy(frame->dst_addr, arp_cache[MIP_dest], 6);
-				memcpy(frame->src_addr, iface_hwaddr, 6);
-				frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
-				memcpy(frame->contents, mip, mipsize);
-				ssize_t retv = send(networkSocket, frame, msgsize, 0);
+				// memcpy(frame->dst_addr, arp_cache[MIP_dest], 6);
+				// memcpy(frame->src_addr, iface_hwaddr, 6);
+				// frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
+				// memcpy(frame->contents, mip, mipsize);
+				// ssize_t retv = send(networkSocket, frame, msgsize, 0);
 
-				free(mip);
-				free(frame);
+				// free(mip);
+				// free(frame);
 
-				if(retv < 0){
-					perror("ARP response send");
-					return -17;
-				}
+				// if(retv < 0){
+				// 	perror("ARP response send");
+				// 	return -17;
+				// }
 
-				// Sent ARP Response back
-				if(debug){
-					printf("Responding to arp request from MIP %u", mip->dst_addr);
-				}
+				// // Sent ARP Response back
+				// if(debug){
+				// 	printf("Responding to arp request from MIP %u", mip->dst_addr);
+				// }
 
-				memcpy(arp_cache[MIP_dest], frame->src_addr, 6);
-				arp_check[MIP_dest] = 1;
+				// memcpy(arp_cache[MIP_dest], frame->src_addr, 6);
+				// arp_check[MIP_dest] = 1;
 			}
-
 		}
 	}
 	close(clientSocket);

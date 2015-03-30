@@ -231,7 +231,7 @@ int main(int argc, char *argv[]) {
 				struct mip_packet *arp_req = malloc(mipsize);
 				assert(arp_req);
 
-				arp_req->TRA = 1;								// TRA = 4 == 100
+				arp_req->TRA = 1;								// TRA = 1 == 100
 				arp_req->TTL = 15;								// Payload
 				arp_req->payload = 0;							// Destination addr
 				arp_req->src_addr = addr;						// Source addr
@@ -382,7 +382,6 @@ int main(int argc, char *argv[]) {
 			}
 
 			struct mip_packet *recv_mip = (struct mip_packet *)frame->contents;
-			uint8_t MIP_dest = mip->src_addr;
 
 			// Tell them what you got, mip and mac
 			if(debug){
