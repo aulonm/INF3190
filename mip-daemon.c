@@ -48,14 +48,14 @@ struct neighbour{
 
 
 
-int clientSocket, networkSocket, i;
+int clientSocket, networkSocket, i, j;
 int debug = 0;						// Debug mode
 uint8_t iface_hwaddr[6];			// Mac address array
 uint8_t arp_cache[256][6];			// ARP-cache to holde the MAC addrs
 uint8_t arp_check[256];				// ARP-check to know if there are any addrs there
 uint8_t routing_table[256][2];		// The routing table
 int counter;						// Keep in check how long the neighbour-struct is
-
+struct timeval tv;
 uint8_t addr;						// Address where to send messages
 const char *sockname;				// socket name
 const char *interface;				// The interface to send packets to
@@ -118,17 +118,16 @@ int update_routingtable(uint8_t recvd[256][2], uint8_t recvd_mip){
 	return 0;
 }
 
-int arp_request(char rbuf[1500]){
+int arp_request(struct neighbour neigh){
 	mipsize = sizeof(struct mip_packet);
 	mip = malloc(mipsize);
 	assert(mip);
 
-	printf("%u\n", rbuf[0]);
 	mip->TRA = 1;
 	mip->TTL = 15;
 	mip->payload = 0;
-	mip->dst_addr = rbuf[0];
-	mip->src_addr = addr;
+	mip->dst_addr = neigh.neighbour_mip;
+	mip->src_addr = neigh.src_mip;
 
 	msgsize = sizeof(struct ether_frame) + mipsize;
 	frame = malloc(msgsize);
@@ -137,7 +136,7 @@ int arp_request(char rbuf[1500]){
 	memcpy(frame->dst_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6);
 
 	/* Fill in our source address */
-	memcpy(frame->src_addr, iface_hwaddr, 6);
+	memcpy(frame->src_addr, neigh.own_mac, 6);
 
 	/* Ethernet protocol field = 0xFFFF (MIP) */
 	frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
@@ -146,7 +145,7 @@ int arp_request(char rbuf[1500]){
 	memcpy(frame->contents, mip, mipsize);
 
 	/* Send the packet */
-	ssize_t retv = send(networkSocket, frame, msgsize, 0);
+	ssize_t retv = send(neigh.socket, frame, msgsize, 0);
 
 	free(mip);
 	free(frame);
@@ -158,9 +157,9 @@ int arp_request(char rbuf[1500]){
 
 	if(debug){
 		printf("Arp request:\n");
-		printf("\tFrom mip: %u, to mip: %u\n", addr, (uint8_t)rbuf[0]);
+		printf("\tFrom mip: %u, to mip: %u\n", neigh.src_mip, neigh.neighbour_mip);
 		printf("\tSource ethernet address: ");
-		printmac(iface_hwaddr);
+		printmac(neigh.own_mac);
 	}
 
 	while(1){
@@ -169,7 +168,7 @@ int arp_request(char rbuf[1500]){
 
 		frame = (struct ether_frame*)buf;
 
-		ssize_t retv = recv(networkSocket, buf, sizeof(buf), 0);
+		ssize_t retv = recv(neigh.socket, buf, sizeof(buf), 0);
 
 		if(retv < 0){
 			perror("ARP Response receive");
@@ -180,7 +179,7 @@ int arp_request(char rbuf[1500]){
 
 		
 		/* If TRA bits are 000 then it is an ARP Response */
-		if((mip->TRA == 0) && (mip->dst_addr == addr)){
+		if((mip->TRA == 0) && (mip->dst_addr == neigh.src_mip)){
 			if(debug){
 				printf("Got ARP response:\n");
 				printf("\tFrom mip: %u\n", mip->src_addr);
@@ -243,7 +242,7 @@ int clientHandler(char rbuf[1500], ssize_t recvd){
 	/* ARP REQUEST */
 	if(arp_check[(unsigned int)rbuf[0]] != 1){
 		/* Start making the Ether frame */
-		arp_request(rbuf);
+		//arp_request(rbuf[0], 23);
 	}
 
 	if(debug){
@@ -306,12 +305,12 @@ int clientHandler(char rbuf[1500], ssize_t recvd){
 	return 0;
 }
 
-int networkHandler(int cfd){
+int networkHandler(int cfd, struct neighbour neigh){
 	/* Receive the ethernet frame from an other MIP */
 	char buf[1500];
 	memset(buf, 0, sizeof(buf));
 	frame = (struct ether_frame*)buf;
-	ssize_t retv = recv(networkSocket, buf, sizeof(buf), 0);
+	ssize_t retv = recv(neigh.socket, buf, sizeof(buf), 0);
 
 	if(retv < 0){
 		perror("Network receive");
@@ -331,7 +330,7 @@ int networkHandler(int cfd){
 	}
 	
 	/* Check if it is a transport and destination is this mip-daemon */
-	if((mip->TRA == 4) && (mip->dst_addr == addr)){
+	if((mip->TRA == 4) && (mip->dst_addr == neigh.src_mip)){
 		char* sbuf[1500];
 		memset(sbuf, 0, sizeof(sbuf));
 		sbuf[0] = mip->src_addr;
@@ -352,11 +351,18 @@ int networkHandler(int cfd){
 	}
 
 	/* Check if it is an ARP Request, if it is then start making ARP Response and send */
-	else if((mip->TRA == 1) && (mip->dst_addr == addr)){
+	else if((mip->TRA == 1) && (mip->dst_addr == neigh.src_mip)){
 		arp_response(mip);
 	}
 
-	else if((mip->TRA == 2) && (mip->dst_addr == addr)){
+	/* Check if it is an routing packet */
+	else if((mip->TRA == 2) && (mip->dst_addr == neigh.src_mip)){
+		// HOW THE FUCK DO YOU WANT ME TO DO THIS ONE
+		update_routingtable(mip->contents, mip->src_addr);
+	}
+
+	/* Transport but this mip is not its destination, forward it */
+	else if((mip->TRA == 4) && (mip->dst_addr != neigh.src_mip)){
 
 	}
 
@@ -520,6 +526,8 @@ int main(int argc, char *argv[]) {
 	fd_set readfds;
 	int cfd = -1;
 
+	tv.tv_sec = 1;
+
 	while(1){
 		/* Clear the set ahead of time */
 		FD_ZERO(&readfds);
@@ -543,16 +551,58 @@ int main(int argc, char *argv[]) {
 		/* Finds out the maxvalue of the file descriptors */
 		if(cfd > maxfd) maxfd = cfd;
 		if(clientSocket > maxfd) maxfd = clientSocket;
-		if(networkSocket > maxfd) maxfd = networkSocket;
+		//if(networkSocket > maxfd) maxfd = networkSocket;
 		for(i = 0; i < counter; i ++){
 			if(neigh[i].socket > maxfd) maxfd = neigh[i].socket;
 		}
 
-
 		retv = select(maxfd + 1, &readfds, NULL, NULL, NULL);
-		if(retv <= 0){
+
+		
+		if(retv == -1){
 			perror("select");
 			return -9;
+		}
+		else if(retv == 0){
+			/* Took over 1 sec to get anything from select, sending out routing tables! */
+			for(i = 0; i < counter; i++){
+				if(arp_check[neigh[i].neighbour_mip] != 0){
+					arp_request(neigh[i]);
+				}
+				uint8_t tmp_routing[256][2];
+				for(j = 0; j < 256; j++){
+					if(tmp_routing[256][1] == neigh[i].neighbour_mip){
+						tmp_routing[256][0] = 0;
+					}
+				}
+
+				mipsize = sizeof(struct mip_packet) + (256 * 2 * sizeof(uint8_t));
+				mip = malloc(mipsize);
+				assert(mip);
+
+				mip->TRA = 2;
+				mip->TTL = 15;
+				mip->payload = 256 * 2 * sizeof(uint8_t);
+				mip->dst_addr = neigh[i].neighbour_mip;
+				mip->src_addr = neigh[i].src_mip;
+				memcpy(mip->contents, tmp_routing, (256 * 2 * sizeof(uint8_t)));
+
+				msgsize = sizeof(struct ether_frame) + mipsize;
+				frame = malloc(msgsize);
+				memcpy(frame->dst_addr, arp_cache[neigh[i].neighbour_mip], 6);
+				memcpy(frame->src_addr, neigh[i].own_mac, 6);
+				frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
+				ssize_t retv = send(neigh[i].socket, frame, msgsize, 0);
+				if(retv < 0){
+					perror("Send routing table");
+					return -1;
+				}
+
+				if(debug){
+					printf("Do something yo");
+				}
+
+			}
 		}
 
 		/* If you get a cfd then this part happens, the client is sending messages */
@@ -575,9 +625,16 @@ int main(int argc, char *argv[]) {
 		}
 
 		/* If you get a networkSocket then this will happen */
-		if(FD_ISSET(networkSocket, &readfds)){
-			networkHandler(cfd);
+		for(i = 0; i < counter; i++){
+			if(FD_ISSET(neigh[i].socket, &readfds)){
+				networkHandler(cfd, neigh[i]);
+			}	
 		}
+		
+
+
+
+
 	}
 	close(clientSocket);
 	close(networkSocket);
