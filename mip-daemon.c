@@ -47,9 +47,6 @@ struct neighbour{
 	int socket;
 } __attribute__((packed));
 
-
-
-
 int clientSocket, networkSocket, i, j;
 int debug = 0;						// Debug mode
 uint8_t iface_hwaddr[6];			// Mac address array
@@ -69,7 +66,7 @@ size_t msgsize;
 struct mip_packet* mip;
 size_t mipsize;
 
-
+/* Prints out the routing table */
 static void print_table(uint8_t table[256][2]){
 	for(i = 0; i < 256; i++){
 		if(table[i][0] != 0){
@@ -114,10 +111,77 @@ static void printmac(uint8_t mac[6]) {
 	printf("%02x\n", mac[5]);
 }
 
-int read_and_intialize(){
+/* Bind the client socket */
+int bind_clientsocket(){
+	/**
+	*   AF_UNIX         =
+	*   SOCK_SEQPACKET  =
+	*   0               =
+	**/
+	clientSocket = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+
+	/* If the clientsocket returns -1 there is a problem */
+	if(clientSocket == -1){
+		perror("ClientSocket");
+		return -3;
+	}
+
+	// Bind the AF_UNIX socket
+	struct sockaddr_un bindaddr;
+	bindaddr.sun_family = AF_UNIX;
+	strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
+	int retv = bind(clientSocket, (struct sockaddr *)&bindaddr, sizeof(bindaddr.sun_path));
+
+	/* If it doesnt return 0, it couldnt bind to the socket */
+	if(retv != 0){
+		perror("bind");
+		return -7;
+	}
+
+	/* Listens to incoming connections from client programs */
+	if(listen(clientSocket, 5)){
+		perror("listen");
+		return -8;
+	}
+
 	return 0;
 }
 
+/* Bind the network sockets */
+int bind_networksocket(struct neighbour neigh[], int place, char interface[20]){
+	/**
+	* AF_PACKET = raw socket interface
+	* SOCK_RAW  = we cant the 12 header intact (SOCK_DGRAM removes header)
+	* ETH_P_ALL = all ethernet protocols
+	**/
+	neigh[i].socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_MIP));
+
+	/* If the networksSocket returns -1 there is a problem */
+	if(neigh[i].socket == -1){
+		perror("Raw Socket");
+		return -1;
+	}
+
+	/* Gets the MAC address, and if the return value is not 0, exit */
+	if(get_if_hwaddr(neigh[i].socket, interface, neigh[i].own_mac) != 0){
+		return -1;
+	}
+
+	/* Bind the networksocket to the specified interface */
+	struct sockaddr_ll device;
+	memset(&device, 0, sizeof(device));
+	device.sll_family = AF_PACKET;
+	device.sll_ifindex = if_nametoindex(interface);
+	if(bind(neigh[i].socket, (struct sockaddr *)&device, sizeof(device))){
+		perror("Could not bind raw socket");
+		close(neigh[i].socket);
+		return -6;
+	}
+
+	return 0;
+}
+
+/* Updates the routing table */
 void update_routingtable(uint8_t recvd[256], uint8_t recvd_mip){
 	
 	// for(i = 0; i < sizeof(routing_table); i++){
@@ -149,6 +213,7 @@ void update_routingtable(uint8_t recvd[256], uint8_t recvd_mip){
 	print_table(routing_table);
 }
 
+/* Makes an arp response frame and sends it back */
 int arp_response(struct ether_frame* recvd_frame, struct neighbour neigh){
 	mip = (struct mip_packet*)recvd_frame->contents;
 	uint8_t MIP_dest = mip->src_addr;
@@ -197,6 +262,7 @@ int arp_response(struct ether_frame* recvd_frame, struct neighbour neigh){
 	return 0;
 }
 
+/* Makes an arp request frame and sends it out */
 int arp_request(struct neighbour neigh){
 	printf("Making arp request\n");
 	mipsize = sizeof(struct mip_packet);
@@ -284,7 +350,7 @@ int arp_request(struct neighbour neigh){
 	return 0;
 }
 
-
+/* Handles the information coming from the clientside */
 int clientHandler(char rbuf[1500], ssize_t recvd, struct neighbour neigh[]){
 	
 	for(i = 0; i < counter; i++){
@@ -315,7 +381,7 @@ int clientHandler(char rbuf[1500], ssize_t recvd, struct neighbour neigh[]){
 		assert(mip);
 
 		mip->TRA = 4;										// TRA = 4 = 100
-		mip->TTL = 15;										// TTL = 15 = 1111
+		mip->TTL = routing_table[rbuf[0]][0];										// TTL = 15 = 1111
 		mip->payload = recvd - 1;							// Payload
 		mip->dst_addr = rbuf[0];							// Destination addr
 		mip->src_addr = neigh[i].src_mip;								// Source addr
@@ -354,6 +420,7 @@ int clientHandler(char rbuf[1500], ssize_t recvd, struct neighbour neigh[]){
 	return 0;
 }
 
+/* Handles the frames coming in from the network */
 int networkHandler(int cfd, struct neighbour neigh[], int place){
 	/* Receive the ethernet frame from an other MIP */
 	char buf[1500];
@@ -416,6 +483,7 @@ int networkHandler(int cfd, struct neighbour neigh[], int place){
 	else if((mip->TRA == 4) && (mip->dst_addr != neigh[place].src_mip)){
 		uint8_t via;
 		if(mip->TTL == 0){
+			printf("TTL IS UNDER 0");
 			return 0;
 		}
 		for(i = 0; i < 256; i++){
@@ -426,6 +494,7 @@ int networkHandler(int cfd, struct neighbour neigh[], int place){
 		mip->TTL = mip->TTL-1;
 		memcpy(frame->dst_addr, arp_cache[via], 6);
 		ssize_t fsize = sizeof(struct ether_frame) + sizeof(struct mip_packet) + mip->payload;
+		printf("Sending the frame to ");
 		for(i = 0; i < counter; i++){
 			if(neigh[i].neighbour_mip == via){
 				memcpy(frame->src_addr, neigh[i].own_mac, 6);
@@ -454,9 +523,7 @@ int main(int argc, char *argv[]) {
 		return -2;
 	}
 
-
 	/* Set the mandatory arguments to its respective variable */
-
 	sockname = argv[1];
 	stringFile = argv[2];
 
@@ -466,237 +533,130 @@ int main(int argc, char *argv[]) {
 			debug = 1;
 		}
 	}
+
 	debug = 1;
+
 	/* Reset the arrays to 0 */
 	memset(&arp_cache, 0, sizeof(arp_cache));
 	memset(&arp_check, 0, sizeof(arp_check));
 	memset(&routing_table, 0, sizeof(routing_table));
 
-	
-
+	/* Setting up to read from file */
 	FILE *myFile;
 	myFile = fopen(stringFile, "r");
+
+	/* tmpvariables to use for reading from file */
 	unsigned int src_mip;
 	unsigned int neighbour_mip;
 	char interface[20];
 
+	/* Check if file is empty */
 	if(myFile == NULL){
 		perror("Reading file:");
 		return -1;
 	}
 
-	// To find out how many of the struct neighbour we need
+	/* To find out how many of the struct neighbour we need */
 	while(fscanf(myFile, "%u %u %s", &src_mip, &neighbour_mip, interface) != EOF){
 		counter++;
 	}
 
+	/* Rewind the file so we can use it for real reading now */
 	rewind(myFile);
 
+	/* Set up an array of structs for neighbours/links */
 	struct neighbour neigh[counter];
 
+	/* Read the file, bind the sockets, and set the right variables in the struct */
 	for(i = 0; i < counter; i++){
 		if(fscanf(myFile, "%u %u %s", &src_mip, &neighbour_mip, interface) != EOF){
 			neigh[i].neighbour_mip = neighbour_mip;
 			neigh[i].src_mip = src_mip;
-			/**
-			* AF_PACKET = raw socket interface
-			* SOCK_RAW  = we cant the 12 header intact (SOCK_DGRAM removes header)
-			* ETH_P_ALL = all ethernet protocols
-			**/
-			neigh[i].socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_MIP));
-			//printf("Hello yes, this is my int socket: %d\n", neigh[i].socket);
 			
-			/* If the networksSocket returns -1 there is a problem */
-			if(neigh[i].socket == -1){
-				perror("Raw Socket");
-				return -1;
-			}
-
-			/* Gets the MAC address, and if the return value is not 0, exit */
-			if(get_if_hwaddr(neigh[i].socket, interface, neigh[i].own_mac) != 0){
-				return -1;
-			}
-
-			/* Bind the networksocket to the specified interface */
-			struct sockaddr_ll device;
-			memset(&device, 0, sizeof(device));
-			device.sll_family = AF_PACKET;
-			device.sll_ifindex = if_nametoindex(interface);
-			if(bind(neigh[i].socket, (struct sockaddr *)&device, sizeof(device))){
-				perror("Could not bind raw socket");
-				close(neigh[i].socket);
-				return -6;
-			}
+			bind_networksocket(neigh, i, interface);
 
 			// Intialize the routing table
 			routing_table[neighbour_mip][0] = 1;
 			routing_table[neighbour_mip][1] = neighbour_mip;
 
 			/* Print the hardware address of the interface */
-			printf("Interface: 	%d\n", i);
+			printf("Interface nr %d: ", i);
 			printmac(neigh[i].own_mac);
 
 		}
 	}
-	printf("Table after initial read:\n");
-	print_table(routing_table);
-	
+	//print_table(routing_table);	
 
 	fclose(myFile);
 
-	printf("Client socket making\n");
-	/**
-	*   AF_UNIX         =
-	*   SOCK_SEQPACKET  =
-	*   0               =
-	**/
-	clientSocket = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-
-
-	
-	//networkSocket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_MIP));
-
-	/* If the clientsocket returns -1 there is a problem */
-	if(clientSocket == -1){
-		perror("ClientSocket");
-		return -3;
-	}
-
-	/* If the networksSocket returns -1 there is a problem */
-	// if(networkSocket == -1){
-	// 	perror("Raw socket");
-	// 	return -4;
-	// }
-
-	/* Gets the MAC address, and if the return value is not 0, exit */
-	// if(get_if_hwaddr(networkSocket, interface, iface_hwaddr) != 0){
-	// 	return -5;
-	// }
-
-	/* Print the hardware address of the interface */
-	//printmac(iface_hwaddr);
-
-	// Bind the networksocket to the specified interface
-	// struct sockaddr_ll device;
-	// memset(&device, 0, sizeof(device));
-	// device.sll_family = AF_PACKET;
-	// device.sll_ifindex = if_nametoindex(interface);
-
-	// if(bind(networkSocket, (struct sockaddr *)&device, sizeof(device))){
-	// 	perror("Could not bind raw socket");
-	// 	close(networkSocket);
-	// 	return -6;
-	// }
-
-	// Bind the AF_UNIX socket
-	struct sockaddr_un bindaddr;
-	bindaddr.sun_family = AF_UNIX;
-	strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
-	int retv = bind(clientSocket, (struct sockaddr *)&bindaddr, sizeof(bindaddr.sun_path));
-
-	/* If it doesnt return 0, it couldnt bind to the socket */
-	if(retv != 0){
-		perror("bind");
-		return -7;
-	}
-
-	/* Listens to incoming connections from client programs */
-	if(listen(clientSocket, 5)){
-		perror("listen");
-		return -8;
-	}
+	/* Bind the clientsocket */
+	bind_clientsocket();
 
 	fd_set readfds;
 	int cfd = -1;
 
-	tv.tv_sec = 3;
+	/* Set the timeout for the select */
+	tv.tv_sec = 1;
 	tv.tv_usec = 0;
 
-	printf("Im going in the while now!\n");
 	while(1){
 		int maxfd = -1;
+		
 		/* Clear the set ahead of time */
 		FD_ZERO(&readfds);
 
 		/* If the cfd is less then 0, add a clientSocket to the set */
 		if(cfd < 0){
-			//printf("set the clinetsocket\n");
 			FD_SET(clientSocket, &readfds);
 		}
 		/* Else add the cfd to the set */
 		else{
-			//printf("set the cfd\n");
 			FD_SET(cfd, &readfds);
 		}
 
 		/* Add all the networkSockets to the set */
-		//FD_SET(networkSocket, &readfds);
 		for(i = 0; i < counter; i++){
-			//printf("Setting neighboursocket nr: %d \tint: %d\n ", i, neigh[i].socket);
 			FD_SET(neigh[i].socket, &readfds);
 		}
 		
-
 		/* Finds out the maxvalue of the file descriptors */
-		
-		if(cfd > maxfd){
-			//printf("cfd int is: %d\n", cfd);
-			maxfd = cfd;
-		}
-		if(clientSocket > maxfd){
-			//printf("Clientsocket int is: %d\n", clientSocket);
-			maxfd = clientSocket;
-		}
-		//if(networkSocket > maxfd) maxfd = networkSocket;
+		if(cfd > maxfd)	maxfd = cfd;
+		if(clientSocket > maxfd) maxfd = clientSocket;
 		for(i = 0; i < counter; i ++){
-			//printf("Neighboursocket int: %d\n", neigh[i].socket);
 			if(neigh[i].socket > maxfd) maxfd = neigh[i].socket;
 		}
-		//printf("maxfd int is: %d\n", maxfd);
 
-		//printf("Hello this is the select speaking\n");
-		retv = select(maxfd + 1, &readfds, NULL, NULL, &tv);
-		//printf("Hello select, you are done for now\n");
+		int retv = select(maxfd + 1, &readfds, NULL, NULL, &tv);
 		
 		if(retv == -1){
 			perror("select");
 			return -9;
-		}
-		else if(retv == 0){
+		} else if(retv == 0){
 			tv.tv_sec = 1;
-			//printf("Over 1 sec, sending out routingtables\n");
 			/* Took over 1 sec to get anything from select, sending out routing tables! */
 			for(i = 0; i < counter; i++){
-				//printf("Neighsocket is 1: %d\n", neigh[i].socket);
 				if(arp_check[neigh[i].neighbour_mip] != 1){
 					printf("Sending arp request\n");
 					arp_request(neigh[i]);
 				}
-				//printf("Neighsocket is 2: %d\n", neigh[i].socket);
+
 				uint8_t tmp_routing[256];
 				memset(tmp_routing, 0, sizeof(tmp_routing));
-				//printf("Neighsocket is 5: %d\n", neigh[i].socket);
 
 				for(j = 0; j < 256; j++){
 					if(routing_table[j][1] == neigh[i].neighbour_mip){
 						tmp_routing[j] = 0;
-					}
-					else{
+					} else{
 						tmp_routing[j] = routing_table[j][0]; 
 					}
 				}
-				//printf("Neighsocket is 6: %d\n", neigh[i].socket);
 
-				//printf("Temp table before sending update to other mips:\n");
-				//print_tmptable(tmp_routing);
-				for(j = 0; j < 256; j++){
-					if(tmp_routing[j] != 0){
-						printf("Routing table:\t Dest: %d \t Cost: %u\n", j, tmp_routing[j]);			
-					}
-				}
-				// sleep(2);
+				// for(j = 0; j < 256; j++){
+				// 	if(tmp_routing[j] != 0){
+				// 		printf("Routing table:\t Dest: %d \t Cost: %u\n", j, tmp_routing[j]);			
+				// 	}
+				// }
 
-				//printf("Neighsocket is 3: %d\n", neigh[i].socket);
 				mipsize = sizeof(struct mip_packet) + sizeof(tmp_routing);
 				mip = malloc(mipsize);
 				assert(mip);
@@ -711,29 +671,20 @@ int main(int argc, char *argv[]) {
 				msgsize = sizeof(struct ether_frame) + mipsize;
 				frame = malloc(msgsize);
 				assert(msgsize);
-				//printf("Neighsocket is 4: %d\n", neigh[i].socket);
-
 				memcpy(frame->dst_addr, arp_cache[neigh[i].neighbour_mip], 6);
 				memcpy(frame->src_addr, neigh[i].own_mac, 6);
 				frame->eth_proto[0] = frame->eth_proto[1] = 0xFF;
 				memcpy(frame->contents, mip, mipsize);
-				//printf("Socket int: %d\n",neigh[i].socket);
-				//printf("SENT ROUTING: TRA: %u \t dst: %u \t src: %u\n", mip->TRA, mip->dst_addr, neigh[i].src_mip);
-				
+
 				ssize_t retv = send(neigh[i].socket, frame, msgsize, 0);
 
 				if(retv < 0){
 					perror("Send routing table");
-					sleep(100);
 					return -1;
 				}
 
-				// if(debug){
-				// 	printf("Do something yo");
-				// }
 				free(frame);
 				free(mip);
-
 			}
 		}
 
@@ -754,22 +705,15 @@ int main(int argc, char *argv[]) {
 
 		/* If we dont have any connection on that socket, then accept one */
 		if(FD_ISSET(clientSocket, &readfds)){
-			//printf("Hello this is clientSocket");
 			cfd = accept(clientSocket, NULL, NULL);
 		}
 
 		/* If you get a networkSocket then this will happen */
 		for(i = 0; i < counter; i++){
 			if(FD_ISSET(neigh[i].socket, &readfds)){
-				//printf("Hello this is networkdsocket nr: %d\n", i);
 				networkHandler(cfd, neigh, i);
 			}	
 		}
-		
-
-
-
-
 	}
 	close(clientSocket);
 	unlink(sockname);
