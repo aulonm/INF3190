@@ -44,7 +44,7 @@ int main(int argc, char* argv[]){
 			sbuf[0] = buf[0];
 			sbuf[1] = 0;
 			strcat(sbuf, pong);
-			printf("sending: %s - %u\n", sbuf, sizeof(sbuf));
+			printf("sending: %s\n", sbuf);
 			ssize_t sent = send(usock, sbuf, strlen(sbuf), 0);
 
 			if(sent < 0){
