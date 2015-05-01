@@ -14,9 +14,18 @@
 #include <sys/ioctl.h>
 #include <bits/ioctls.h>
 
-
-
 #define ETH_P_MIP 65535
+#define ERROR_RECV -2
+#define ERROR_SEND -3
+#define ERROR_BIND -4
+#define ERROR_SELECT -5
+#define ERROR_SOCKET -6
+
+#ifdef DEBUG
+#define DPRINT(args...) fprintf(stderr,"%10s:%-3d - ", __FILE__, __LINE__); fprintf(stderr, args);
+#else
+#define DPRINT(args...)
+#endif
 
 /**
  * Struct definition of a MIP Packet
@@ -71,20 +80,24 @@ size_t mipsize;
 
 /**
 *	Prints out the elements of the given array
-*
+*	
 *	@param table 	The table we want to print out its information
 **/
 static void print_table(uint8_t table[256][2]){
+	printf("ROUTING TABLE:\n");
+	printf("\t--------------------\n");
+	printf("\tdst\tvia\tcost\n");
 	for(i = 0; i < 256; i++){
 		if(table[i][0] != 0){
-			printf("Routing table:\t Dest: %d \t Via: %u \t Cost: %u\n", i, table[i][1], table[i][0]);
+			printf("\t%d\t%u\t%u\n", i, table[i][1], table[i][0]);
 		}
 	}
+	printf("\t--------------------\n");
 }
 
 /**
 *   Retrieves the hardware address of the given network device
-*
+*	
 *   @param sock     Socket to use for the IOCTL
 *   @param devname  Name of the network device (for example eth0)
 *   @param hwaddr   Buffer to write the hardware address to
@@ -123,6 +136,9 @@ static void printmac(uint8_t mac[6]) {
 *	Set up the clientSocket, bind it and set up listening to incoming connections
 *	
 *	@param Zero on success,	-1 otherwise
+*
+*	Globals:
+*	The clientSocket variable is given an int
 **/
 int bind_clientsocket(){
 	/**
@@ -135,7 +151,7 @@ int bind_clientsocket(){
 	/* If the clientsocket returns -1 there is a problem */
 	if(clientSocket == -1){
 		perror("ClientSocket");
-		return -1;
+		return ERROR_SOCKET;
 	}
 
 	// Bind the AF_UNIX socket
@@ -147,7 +163,7 @@ int bind_clientsocket(){
 	/* If it doesnt return 0, it couldnt bind to the socket */
 	if(retv != 0){
 		perror("bind");
-		return -1;
+		return ERROR_BIND;
 	}
 
 	/* Listens to incoming connections from client programs */
@@ -166,7 +182,7 @@ int bind_clientsocket(){
 *	@param	dl[]		array of all the datalink/datalink structs
 *	@param	pos 		in which position are we going to work in the array
 *	@param	interface 	the interface we are using on this datalink
-*	@param	Zero on success, -1 otherwise
+*	@param	Zero on success, -1 otherwise, or ERROR_BIND
 **/
 int bind_networksocket(struct datalink dl[], int pos, char interface[20]){
 	/**
@@ -179,7 +195,7 @@ int bind_networksocket(struct datalink dl[], int pos, char interface[20]){
 	/* If the networksSocket returns -1 there is a problem */
 	if(dl[pos].socket == -1){
 		perror("Raw Socket");
-		return -1;
+		return ERROR_SOCKET;
 	}
 
 	/* Gets the MAC address, and if the return value is not 0, exit */
@@ -195,7 +211,7 @@ int bind_networksocket(struct datalink dl[], int pos, char interface[20]){
 	if(bind(dl[pos].socket, (struct sockaddr *)&device, sizeof(device))){
 		perror("Could not bind raw socket");
 		close(dl[pos].socket);
-		return -6;
+		return ERROR_BIND;
 	}
 
 	return 0;
@@ -206,14 +222,11 @@ int bind_networksocket(struct datalink dl[], int pos, char interface[20]){
 *
 *	@param	recvd 		The table we received
 *	@param	recvd_mip 	The mip we received the table from
+*
+*	Globals:
+*	The routing table is changed here
 **/
 void update_routingtable(uint8_t recvd[256], uint8_t recvd_mip){
-	for(i = 0; i < 256; i++){
-		if(recvd[i] != 0){
-			printf("Routing table:\t Dest: %d \t Cost: %u\n", i,recvd[i]);
-		}			
-	}
-
 	for(i = 0; i < 256; i++){
 		if(recvd[i] > 0 && (routing_table[i][0] == 0)){
 			routing_table[i][0] = recvd[i]+1;
@@ -224,9 +237,7 @@ void update_routingtable(uint8_t recvd[256], uint8_t recvd_mip){
 			routing_table[i][1] = recvd_mip;
 		}
 	}
-
-	printf("After updating the routing table: \n");
-	print_table(routing_table);
+	if(debug) print_table(routing_table);
 }
 
 /* Makes an arp response frame and sends it back */
@@ -236,6 +247,11 @@ void update_routingtable(uint8_t recvd[256], uint8_t recvd_mip){
 *	@param	recvd_frame	the frame we received, so that we can update our arp_cache
 *	@param	dl 		the correct datalink we are on, so that we get the right information
 *	@param 	Zero on success, -1 otherwise
+*
+*	Globals:
+*	mip and frame variables are changed but free'd in the end
+*	arp_cache and arp_check are updated
+*
 **/
 int arp_response(struct ether_frame* recvd_frame, struct datalink dl){
 	mip = (struct mip_packet*)recvd_frame->contents;
@@ -263,12 +279,10 @@ int arp_response(struct ether_frame* recvd_frame, struct datalink dl){
 
 	if(retv < 0){
 		perror("ARP response send");
-		return -1;
+		return ERROR_SEND;
 	}
 
-	if(debug){
-		printf("Responding to arp request from MIP %u", mip->dst_addr);
-	}
+	if(debug) printf("Responding to arp request from MIP %u", mip->dst_addr);
 
 	memcpy(arp_cache[MIP_dest], recvd_frame->src_addr, 6);
 	arp_check[MIP_dest] = 1;	
@@ -283,10 +297,13 @@ int arp_response(struct ether_frame* recvd_frame, struct datalink dl){
 *	Makes and arp request frame and sends it out on the network
 *
 *	@param	dl 	The datalink we are on at the moment
-*	@param 	Zero on success, -1 otherwise
+*	@param 	Zero on success, -1 otherwise, or ERROR_SEND/RECV
+*
+*	Globals:
+*	mip and frame are changed but free'd in the end
+*	arp_cache and arp_check are updated
 **/
 int arp_request(struct datalink dl){
-	printf("Making arp request\n");
 	mipsize = sizeof(struct mip_packet);
 	mip = malloc(mipsize);
 	assert(mip);
@@ -321,7 +338,7 @@ int arp_request(struct datalink dl){
 
 	if(retv < 0){
 		perror("ARP Request send");
-		return -1;
+		return ERROR_SEND;
 	}
 
 	if(debug){
@@ -332,7 +349,7 @@ int arp_request(struct datalink dl){
 	}
 
 	while(1){
-		printf("Waiting for arp response\n");
+		if(debug) printf("Waiting for arp response\n");
 		char buf[1500];
 		memset(buf, 0, sizeof(buf));
 
@@ -342,7 +359,7 @@ int arp_request(struct datalink dl){
 
 		if(retv < 0){
 			perror("ARP Response receive");
-			return -1;
+			return ERROR_RECV;
 		}
 
 		mip = (struct mip_packet*)frame->contents;
@@ -375,13 +392,13 @@ int arp_request(struct datalink dl){
 *
 *	@param	dl[]	The datalinks this mip has
 *	@param	fframe 	The frame we have received
-*	@param	Zero on success, -1 otherwise
+*	@param	Zero on success, -1 otherwise, return 1 if TTL is under 1, or ERROR_SEND
 **/
 int forward_frame(struct datalink dl[], struct ether_frame* fframe){
 	struct mip_packet* fmip = (struct mip_packet*)fframe->contents;
 	uint8_t via;
 	if(fmip->TTL == 0){
-		printf("TTL IS UNDER 0");
+		printf("TTL IS UNDER 0\n");
 		return 1;
 	}
 	for(i = 0; i < 256; i++){
@@ -404,7 +421,18 @@ int forward_frame(struct datalink dl[], struct ether_frame* fframe){
 
 			if(retv < 0){
 				perror("Forwarding");
-				return -1;
+				return ERROR_SEND;
+			}
+
+			if(debug){
+				printf("Forwarding frame\n");
+				printf("\tTTL: %u", fmip->TTL);
+				printf("\tSource Mac: 		");
+				printmac(fframe->src_addr);
+				printf("\tDestination Mac: 	");
+				printmac(fframe->dst_addr);
+				printf("\tMIP source: 		%u\n", fmip->src_addr);
+				printf("\tMIP Destination: 	%u\n", fmip->dst_addr);
 			}
 		}
 	}
@@ -417,7 +445,7 @@ int forward_frame(struct datalink dl[], struct ether_frame* fframe){
 *	@param	rbuf	The buffer we received from the client
 *	@param	recvd 	The size of the message
 *	@param	dl[] Alle the datalinks we have stored to run through
-*	@param	Zero on success, -1 otherwise
+*	@param	Zero on success, -1 otherwise, or ERROR_SEND
 **/
 int clientHandler(char rbuf[1500], ssize_t recvd, struct datalink dl[]){
 	int pos, via;
@@ -434,18 +462,21 @@ int clientHandler(char rbuf[1500], ssize_t recvd, struct datalink dl[]){
 
 	/* If the arp cache table doesnt have the address, send an arp request */
 	/* ARP REQUEST */
-	if(dl[pos].dstlink_mip == (uint8_t)rbuf[0])
+	if(arp_check[(uint8_t)rbuf[0]] != 1)
 		arp_request(dl[pos]);
 
 	if(debug){
 		printf("Arp Table:\n");
+		printf("\t-------------------------\n");
 		int i;
+		printf("\tMIP\tMAC\n");
 		for(i = 0; i < 256; i++){
 			if(arp_check[i]){
-				printf("MIP: %u - Mac: ", i);
+				printf("\t%u\t", i);
 				printmac(arp_cache[i]);
 			}
 		}
+		printf("\t-------------------------\n");
 	}
 
 	/**
@@ -459,7 +490,7 @@ int clientHandler(char rbuf[1500], ssize_t recvd, struct datalink dl[]){
 	assert(mip);
 
 	mip->TRA = 4;										// TRA = 4 = 100
-	mip->TTL = routing_table[(uint8_t)rbuf[0]][0];										// TTL = 15 = 1111
+	mip->TTL = routing_table[(uint8_t)rbuf[0]][0];		// TTL = cost
 	mip->payload = recvd - 1;							// Payload
 	mip->dst_addr = rbuf[0];							// Destination addr
 	mip->src_addr = dl[pos].src_mip;								// Source addr
@@ -478,11 +509,12 @@ int clientHandler(char rbuf[1500], ssize_t recvd, struct datalink dl[]){
 	
 	if(retv < 0){
 		perror("raw send");
-		return -11;
+		return ERROR_SEND;
 	}
 
 	if(debug){
 		printf("Sending to the other MIP:\n");
+		printf("\tTTL: %u", mip->TTL);
 		printf("\tSource Mac: 		");
 		printmac(frame->src_addr);
 		printf("\tDestination Mac: 	");
@@ -503,7 +535,7 @@ int clientHandler(char rbuf[1500], ssize_t recvd, struct datalink dl[]){
 *	@param	cfd		the client socket
 *	@param	dl[]	all the datalinks information
 *	@param	pos 	the position we are at, at the moment, in the array of datalink structs
-*	@param	Zero on success, -1 otherwise, 1 if TTL == -1
+*	@param	Zero on success, -1 otherwise, 1 if TTL == -1, or ERROR_RECV/SEND
 **/
 int networkHandler(int cfd, struct datalink dl[], int pos){
 	/* Receive the ethernet frame from an other MIP */
@@ -514,7 +546,7 @@ int networkHandler(int cfd, struct datalink dl[], int pos){
 
 	if(retv < 0){
 		perror("Network receive");
-		return -12;
+		return ERROR_RECV;
 	}
 	mip = (struct mip_packet*)frame->contents;
 	
@@ -523,6 +555,7 @@ int networkHandler(int cfd, struct datalink dl[], int pos){
 		printf("Receiving ether frame from other MIP:\n");
 		printf("\tThis MIP: %u\n", dl[pos].src_mip);
 		printf("\tTRA: %u\n", mip->TRA);
+		printf("\tTTL: %u\n", mip->TTL);
 		printf("\tSource Mac: 		");
 		printmac(frame->src_addr);
 		printf("\tDestination Mac: 	");
@@ -543,7 +576,7 @@ int networkHandler(int cfd, struct datalink dl[], int pos){
 
 		if(sent < 0){
 			perror("Send");
-			return -16;
+			return ERROR_SEND;
 		}
 
 		// Tell them what you sent to the client
@@ -574,16 +607,16 @@ int networkHandler(int cfd, struct datalink dl[], int pos){
 *
 *	@param	argc	nr of arguments
 *	@param	argv[]	list of arguments
-*	@param	Zero on success, -1 otherwise
+*	@param	Zero on success, -1 otherwise, or ERROR_SEND/RECV, ERROR_SELECT
 **/
 int main(int argc, char *argv[]) {
 
-	if(argc < 2 || argc > 3){
-		printf("USAGE: %s [socket] [file] [debug]\n", argv[0]);
+	if(argc < 2 && argc > 3){
+		printf("USAGE: %s [socket] [file] [deb]\n", argv[0]);
 		printf("Socket: Socket to connect to\n");
 		printf("File: File with all the information for mips/interfaces etc\n");
-		printf("-d: Debug mode\n");
-		return -2;
+		printf("deb: Debug mode\n");
+		return -1;
 	}
 
 	/* Set the mandatory arguments to its respective variable */
@@ -592,12 +625,10 @@ int main(int argc, char *argv[]) {
 
 	/* Checks if there are any optional command-line args */
 	for (i = 0; i < argc; i++) {
-		if (strcmp(argv[i], "debug") == 0) {
+		if (strcmp(argv[i], "deb") == 0) {
 			debug = 1;
 		}
 	}
-
-	debug = 1;
 
 	/* Reset the arrays to 0 */
 	memset(&arp_cache, 0, sizeof(arp_cache));
@@ -648,8 +679,11 @@ int main(int argc, char *argv[]) {
 
 		}
 	}
-	//print_table(routing_table);	
-
+	if(debug) {
+		printf("Printing the initial routing table\n");
+		print_table(routing_table);	
+	}	
+	
 	fclose(myFile);
 
 	/* Bind the clientsocket */
@@ -693,7 +727,7 @@ int main(int argc, char *argv[]) {
 		
 		if(retv == -1){
 			perror("select");
-			return -9;
+			return ERROR_SELECT;
 		} else if(retv == 0){
 			tv.tv_sec = 1;
 			/* Took over 1 sec to get anything from select, sending out routing tables! */
@@ -714,11 +748,16 @@ int main(int argc, char *argv[]) {
 					}
 				}
 
-				// for(j = 0; j < 256; j++){
-				// 	if(tmp_routing[j] != 0){
-				// 		printf("Routing table:\t Dest: %d \t Cost: %u\n", j, tmp_routing[j]);			
-				// 	}
-				// }
+				if(debug){
+					printf("The temp routing table we are sending:\n");
+					printf("\t-----------------\n");
+					printf("\tdest\tcost");
+					for(j = 0; j < 256; j++){
+						if(tmp_routing[j] != 0)
+							printf("\t%d\t%u\n", j, tmp_routing[j]);
+					}
+					printf("\t-----------------\n");
+				}
 
 				mipsize = sizeof(struct mip_packet) + sizeof(tmp_routing);
 				mip = malloc(mipsize);
@@ -743,7 +782,17 @@ int main(int argc, char *argv[]) {
 
 				if(retv < 0){
 					perror("Send routing table");
-					return -1;
+					return ERROR_SEND;
+				}
+
+				if(debug){
+					printf("Sending frame with routing table:\n");
+					printf("\tSource Mac: 		");
+					printmac(frame->src_addr);
+					printf("\tDestination Mac: 	");
+					printmac(frame->dst_addr);
+					printf("\tMIP source: 		%u\n", mip->src_addr);
+					printf("\tMIP Destination: 	%u\n", mip->dst_addr);
 				}
 
 				free(frame);
@@ -759,8 +808,9 @@ int main(int argc, char *argv[]) {
 			if(recvd == 0){
 				cfd = -1;
 				continue;
+			} else if(recvd < 0){
 				perror("read");
-				return -10;
+				return ERROR_RECV;
 			} 
 			clientHandler(rbuf, recvd, dl);
 		}
