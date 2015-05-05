@@ -22,11 +22,14 @@ struct tp_packet {
 } __attribute__((packed));
 
 
+struct connections {
 
+} __attribute__((packed));
 
 int main(int argc, char *argv[]){
 	int clientSocket, mipSocket;
 	const char *sock1, *sock2;
+	int packet_recvd = -1; /* highest packet successfully received */
 
 	if(argc < 4){
 		printf("USAGE: %s [sock1] [sock2] [-d]\n", argv[0]);
@@ -80,6 +83,63 @@ int main(int argc, char *argv[]){
 
 	int clientfds[10];
 	memset(clientfds, 0, sizeof(clientfds));
+	fd_set rdfds;
+	int i;
+
+
+	while(1){
+		int maxfd = -1;
+		FD_ZERO(&rdfds);
+		FD_SET(mipSocket, &rdfds);
+
+		if(mipSocket > maxfd) maxfd = mipSocket;
+		
+		for(i = 0; i < 10; i++){
+			if(clientfds[i] != 0){
+				FD_SET(clientfds[i], &rdfds);
+				if(clientfds[i] > maxfd) maxfd = clientfds[i];
+			}
+		}
+
+		retv = select(maxfd+1, &rdfds, NULL, NULL, NULL);
+		if(retv <= 0){
+			perror("select");
+			return -1;
+		}
+
+		if(FD_ISSET(mipSocket, &rdfds)){
+
+		}
+
+
+		if(FD_ISSET(clientSocket, &rdfds)){
+			int cfd = accept(clientSocket, NULL, NULL);
+
+			for(i = 0; i < 10; i++){
+				if(clientfds[i] == 0){
+					clientfds[i] = cfd;
+					break;
+				}
+			}
+			if(i == 10){
+				close(cfd);
+			}
+		}
+
+		for(i = 0; i < 10; i++){
+			if(clientfds[i] != 0 && FD_ISSET(clientfds[i], &rdfds)){
+				// PUT THE STUFF IN A BUFFER
+			}
+		}
+
+
+
+
+
+
+
+	}
+
 
 
 	close(clientSocket);
