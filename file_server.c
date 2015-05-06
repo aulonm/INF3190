@@ -9,16 +9,6 @@
 #include <netdb.h>
 #include <time.h>
 
-// // Dette funker naa, lol
-//    FILE *fp;
-//    int ch;
-
-//    fp = fopen("file", "w+");
-//    for( ch = 0 ; ch < strlen(buffer); ch++ )
-//    {
-//       fputc(buffer[ch], fp);
-//    }
-//    fclose(fp);
 
 
 
@@ -37,7 +27,8 @@ int main(int argc, char *argv[]){
 	const char* sockname = argv[1];
 	const char* filename = argv[2];
 	//filesize, what type of variable?
-	const char* port = argvp[4];
+	const long filesize = argv[3];
+	const char* port = argv[4];
 
 	uint8_t portnr = strtoul(port, 0, 10);
 
@@ -48,6 +39,7 @@ int main(int argc, char *argv[]){
 		return -1;
 	}
 
+	char buffer[filesize];
 	
 	struct sockaddr_un bindaddr;
 	bindaddr.sun_family = AF_UNIX;
@@ -59,10 +51,31 @@ int main(int argc, char *argv[]){
 	}
 
 	// SEND THE PORTINFO TO THE TP DAEMON
+	char dummybuf[1];
+	dummybuf[0] = portnr;
+	ssize_t sent = send(usock, dummybuf, strlen(dummybuf), 0);
+	if(sent < 0){
+		perror("Send");
+		return -1;
+	}
 
-
+	int ackCounter = 0;
 	while(1){
-		
+		char buf[1500];
+		ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
+		if(recvd > 0){
+			printf("Received '%s' from tpdaemon\n", strlen(buf));
+			strcat(buffer, buf);
+			if(strlen(buffer) == filesize){
+				FILE *fp;
+				int ch;
+				fp = fopen(filename, "w+");
+				for(ch = 0; ch < strlen(buffer); ch++){
+					fputc(buffer[ch], fp);
+				}
+				fclose(fp);
+			}
+		}
 	}
 
 

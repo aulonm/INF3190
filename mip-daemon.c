@@ -707,13 +707,13 @@ int main(int argc, char *argv[]) {
 			FD_SET(clientSocket, &readfds);
 		}
 		/* Else add the cfd to the set */
-		else{
+		else{ 
 			FD_SET(cfd, &readfds);
 		}
 
 		/* Add all the networkSockets to the set */
 		for(i = 0; i < counter; i++){
-			FD_SET(dl[i].socket, &readfds);
+				FD_SET(dl[i].socket, &readfds);
 		}
 		
 		/* Finds out the maxvalue of the file descriptors */
