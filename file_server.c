@@ -9,13 +9,15 @@
 #include <netdb.h>
 #include <time.h>
 
-
+struct info {
+	unsigned int port: 14;
+}__attribute__((packed));
 
 
 
 int main(int argc, char *argv[]){
 
-	if(argc != 4){
+	if(argc != 5){
 		printf("USAGE: %s [socket] [filename] [filesize] [port]", argv[0]);
 		printf("Socket: Socket you want to connect to\n");
 		printf("Filename: Filename of the new file\n");
@@ -27,10 +29,10 @@ int main(int argc, char *argv[]){
 	const char* sockname = argv[1];
 	const char* filename = argv[2];
 	//filesize, what type of variable?
-	const long filesize = argv[3];
+	const long filesize = strtoul(argv[3], 0, 10);
 	const char* port = argv[4];
 
-	uint8_t portnr = strtoul(port, 0, 10);
+	unsigned int portnr = strtoul(port, 0, 10);
 
 	int usock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 
@@ -38,9 +40,9 @@ int main(int argc, char *argv[]){
 		perror("socket");
 		return -1;
 	}
-
+	printf("hei\n");
 	char buffer[filesize];
-	
+	printf("hei\n");
 	struct sockaddr_un bindaddr;
 	bindaddr.sun_family = AF_UNIX;
 	strncpy(bindaddr.sun_path, sockname, sizeof(bindaddr.sun_path));
@@ -51,32 +53,33 @@ int main(int argc, char *argv[]){
 	}
 
 	// SEND THE PORTINFO TO THE TP DAEMON
-	char dummybuf[1];
-	dummybuf[0] = portnr;
-	ssize_t sent = send(usock, dummybuf, strlen(dummybuf), 0);
+	struct info* info;
+    info = malloc(sizeof(struct info));
+    info->port = portnr;
+
+    printf("port %u\n", info->port);
+	ssize_t sent = send(usock, info, sizeof(info), 0);
 	if(sent < 0){
 		perror("Send");
 		return -1;
 	}
 
-	int ackCounter = 0;
-	while(1){
-		char buf[1500];
-		ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
-		if(recvd > 0){
-			printf("Received '%s' from tpdaemon\n", strlen(buf));
-			strcat(buffer, buf);
-			if(strlen(buffer) == filesize){
-				FILE *fp;
-				int ch;
-				fp = fopen(filename, "w+");
-				for(ch = 0; ch < strlen(buffer); ch++){
-					fputc(buffer[ch], fp);
-				}
-				fclose(fp);
-			}
-		}
-	}
+	// while(1){
+	// 	char buf[1500];
+	// 	ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
+	// 	if(recvd > 0){
+	// 		strcat(buffer, buf);
+	// 		if(strlen(buffer) == filesize){
+	// 			FILE *fp;
+	// 			int ch;
+	// 			fp = fopen(filename, "w+");
+	// 			for(ch = 0; ch < strlen(buffer); ch++){
+	// 				fputc(buffer[ch], fp);
+	// 			}
+	// 			fclose(fp);
+	// 		}
+	// 	}
+	// }
 
 
 

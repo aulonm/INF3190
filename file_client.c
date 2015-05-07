@@ -11,7 +11,6 @@
 
 struct info{
 	unsigned int port: 14;
-	int filesize;
 }__attribute__((packed));
 
 int main(int argc, char* argv[]){
@@ -75,10 +74,8 @@ int main(int argc, char* argv[]){
     struct info* info;
     info = malloc(sizeof(struct info));
     info->port = port;
-    info->filesize = len;
 
     printf("port %u\n", info->port);
-    printf("filesize %u\n", info->filesize);
 
     //Send port and filsize
 	ssize_t sent = send(usock, info, sizeof(info), 0);
@@ -97,5 +94,7 @@ int main(int argc, char* argv[]){
 		}
 		buffer = buffer + sent;
 	}
+
+	free(info);
 	return  0;
 }

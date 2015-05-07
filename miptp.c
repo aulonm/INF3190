@@ -41,6 +41,7 @@ int packet_recvd = 0; /* highest packet successfully received */
 int packet_sent = 0; /* highest packet sent */
 struct connection connections[TOTAL_CONNECTS];
 struct tp_packet window[10];
+int windowCounter = 0;
 
 
 
@@ -122,7 +123,6 @@ int main(int argc, char *argv[]){
 	fd_set rdfds;
 	int i;
 
-
 	while(1){
 		int maxfd = -1;
 		FD_ZERO(&rdfds);
@@ -130,7 +130,7 @@ int main(int argc, char *argv[]){
 		//FD_SET(mipSocket, &rdfds);
 		maxfd = clientSocket;
 
-
+		if(clientSocket > maxfd) maxfd = clientSocket;
 		//if(mipSocket > maxfd) maxfd = mipSocket;
 		
 		for(i = 0; i < TOTAL_CONNECTS; i++){
@@ -152,9 +152,8 @@ int main(int argc, char *argv[]){
 				perror("read");
 				return -1;
 			}
-
+			uint8_t mipaddr = buf[0];
 			struct tp_packet* packet = (struct tp_packet*)buf;
-
 			// Checks if it is an ack, 5 bytes. 1 byte for mip, 4 bytes for tp header
 			if(recvd == 5){
 				//Check if seqnr is the expected nr
@@ -181,22 +180,26 @@ int main(int argc, char *argv[]){
 								}
 								packet_recvd++;
 							}
-
+							memset(buf, 0, sizeof(buf));
+							buf[0] = mipaddr;
 							//Send ack back
 							struct tp_packet* ackPacket;
 							ackPacket = malloc(sizeof(struct tp_packet));
 							ackPacket->port = packet->port;
 							ackPacket->PL = 0;
 							ackPacket->seqnr = packet_recvd;
+							strcat(buf, ackPacket);
 
+							ssize_t sent = send(mipSocket, buf, sizeof(buf), 0);
 							//Send the ack back to the other tp mip, dont forget to put the mip address too
-
+							if(sent < 0){
+								perror("send");
+								return -1;
+							}
 						}
 					}
 				}
 			}
-
-
 		}
 
 		if(FD_ISSET(clientSocket, &rdfds)){
@@ -216,11 +219,27 @@ int main(int argc, char *argv[]){
 				printf("Hello this is cfd\n");
 				char buf[1492];
 				ssize_t recvd = recv(connections[i].cfd, buf, sizeof(buf), 0);
-				
+				if(recvd < 0){
+					perror("receive");
+					return -1;
+				}else if(recvd == 0){
+					close(connections[i].cfd);
+					connections[i].cfd = 0;
+					connections[i].port = 0; 
+					continue;
+				}
+				if(connections[i].port == 0){
+					struct info* info;
+					info = (struct info*)buf;
+					printf("port: %u\n", info->port);
+					printf("port on connection %u\n", connections[i].cfd);
+
+					connections[i].port = info->port;
+				}	
 			}
 		}
 
-		for(i = 0; i < TOTAL_CONNECTS; i++){
+		/*for(i = 0; i < TOTAL_CONNECTS; i++){
 			if(connections[i].cfd != 0 && FD_ISSET(connections[i].cfd, &rdfds)){
 				printf("hello cfd, is it me you are looking for\n");
 				
@@ -251,7 +270,7 @@ int main(int argc, char *argv[]){
 					connections[i].port = info->port;
 				}
 			}
-		}
+		}*/
 	}
 
 
