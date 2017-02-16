@@ -64,25 +64,25 @@ int main(int argc, char *argv[]){
 		return -1;
 	}
 
-	// while(1){
-	// 	char buf[1500];
-	// 	ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
-	// 	if(recvd > 0){
-	// 		strcat(buffer, buf);
-	// 		if(strlen(buffer) == filesize){
-	// 			FILE *fp;
-	// 			int ch;
-	// 			fp = fopen(filename, "w+");
-	// 			for(ch = 0; ch < strlen(buffer); ch++){
-	// 				fputc(buffer[ch], fp);
-	// 			}
-	// 			fclose(fp);
-	// 		}
-	// 	}
-	// }
-
-
-
-	
+	while(1){
+		char buf[1492];
+		ssize_t recvd = recv(usock, buf, sizeof(buf), 0);
+		if(recvd > 0){
+			// Set in the buffer we received, strcat it into the big buffer
+			strcat(buffer, buf);
+			// If the bufferlength is the same as filesize we got in commandline,
+			// then write to the new file with new name
+			if(strlen(buffer) == filesize){
+				FILE *fp;
+				int ch;
+				fp = fopen(filename, "w+");
+				for(ch = 0; ch < strlen(buffer); ch++){
+					fputc(buffer[ch], fp);
+				}
+				printf("Written %d bytes\n", strlen(buffer));
+				fclose(fp);
+			}
+		}
+	}
 	return 0;
 }

@@ -17,7 +17,6 @@ int main(int argc, char* argv[]){
 	FILE *fileptr;
 	char *buffer;
 
-
 	if(argc != 5){
 		printf("len: %d\n", argc);
 		printf("USAGE: %s [Socket] [filename] [address] [port]\n", argv[0]);
@@ -31,10 +30,9 @@ int main(int argc, char* argv[]){
 	const char *sockname = argv[1];
 	const char *filename = argv[2];
 	const char *addr = argv[3];
-	unsigned int *port = strtoul(argv[4], 0, 10);
+	unsigned int port = strtoul(argv[4], 0, 10);
 
 	uint8_t addrs = strtoul(addr, 0, 10);
-
 
 	/**
 	*   AF_UNIX         =	Local communication
@@ -60,24 +58,24 @@ int main(int argc, char* argv[]){
 		return -3;
 	}
 
-
 	// read file put in buffer
 	fileptr = fopen(filename, "r");  
     fseek(fileptr, 0, SEEK_END);  
     ssize_t len = ftell(fileptr);  
-    buffer = malloc(len);  
+    buffer = malloc(len+1);
+	buffer[0] = addrs;  
     fseek(fileptr, 0, SEEK_SET);  
-    fread(buffer, 1, len, fileptr);  
+    fread(buffer+1, 1, len, fileptr);  
     fclose(fileptr);  
 
-    //info about port and filesize to send to tpdaemon
+    //info about port to send to tpdaemon
     struct info* info;
     info = malloc(sizeof(struct info));
     info->port = port;
 
     printf("port %u\n", info->port);
 
-    //Send port and filsize
+    //Send port
 	ssize_t sent = send(usock, info, sizeof(info), 0);
 
 	if(sent < 0){
@@ -85,14 +83,25 @@ int main(int argc, char* argv[]){
 		return -1;
 	}
 
-	while(sent < len){
-		sent = send(usock, buffer, sizeof(buffer), 0);	
+	printf("sent 1: %d\n", sent);
+
+	char mipbuf[1];
+	mipbuf[0] = addrs;
+	int sentCnt = 0;
+	// Send 1492 size packets while under the length of the file	
+	while(sentCnt < len){
+		// Send it
+		sent = send(usock, buffer, len+1, 0);	
 
 		if(sent < 0){
 			perror("send");
 			return -1;
 		}
+		printf("size %d\n", sent); 
+		// Increment the buffer pointer, to get the rest of the file
 		buffer = buffer + sent;
+		// Increment sentCnt with what is sent
+		sentCnt += sent;
 	}
 
 	free(info);

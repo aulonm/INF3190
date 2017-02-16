@@ -572,7 +572,7 @@ int networkHandler(int cfd, struct datalink dl[], int pos){
 		strcat(sbuf, mip->contents);
 
 		/* Send message to server */
-		ssize_t sent = send(cfd, sbuf, strlen(sbuf), 0);
+		ssize_t sent = send(cfd, sbuf, mip->payload+1, 0);
 
 		if(sent < 0){
 			perror("Send");
